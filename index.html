@@ -1,0 +1,1556 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RJ Pvt ltd — Secure Gateway</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <link rel="stylesheet" href="style.css">
+
+    <!-- React 18 & ReactDOM 18 CDNs (cdnjs for enhanced offline/local file loading) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel Standalone for In-Browser JSX Compilation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.22.20/babel.min.js"></script>
+</head>
+<body>
+    <!-- Launch Diagnostic Diagnostic Overlay (shows if script fails or browser is offline) -->
+    <div id="diagnostic-overlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:hsl(225, 25%, 3%); color:hsl(0, 84%, 60%); z-index:999999; padding:40px; font-family:monospace; overflow-y:auto; box-sizing:border-box;">
+        <div style="max-width:800px; margin:0 auto; background:rgba(13,17,28,0.65); border:1px solid rgba(255,255,255,0.08); padding:32px; border-radius:18px; box-shadow:0 25px 50px -12px rgba(0,0,0,0.25); backdrop-filter:blur(20px);">
+            <h2 style="color:hsl(0, 84%, 60%); margin-bottom:12px; font-family:'Outfit', sans-serif; font-size:1.5rem; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:16px;">NexusAuth Boot Diagnostic</h2>
+            <p style="color:hsl(210, 40%, 98%); font-size:0.95rem; line-height:1.5; margin-bottom:20px; font-family:sans-serif;">The application was unable to launch. Below is the diagnostic report. This is usually caused by opening the file offline (blocking CDNs) or a syntax error:</p>
+            <pre id="diagnostic-log" style="background:rgba(0,0,0,0.3); padding:16px; border-radius:10px; border:1px solid rgba(255,255,255,0.05); white-space:pre-wrap; word-break:break-all; font-size:0.85rem; color:#fca5a5; line-height:1.6; max-height:300px; overflow-y:auto;"></pre>
+            <button onclick="location.reload()" style="margin-top:20px; padding:12px 24px; background:linear-gradient(135deg, hsl(250, 95%, 70%) 0%, hsl(280, 90%, 65%) 100%); color:white; border:none; border-radius:10px; cursor:pointer; font-weight:bold; font-family:sans-serif; transition:transform 0.2s;">Retry Connection</button>
+        </div>
+    </div>
+    <script>
+        // Log handler
+        function logDiagnosticError(message) {
+            const overlay = document.getElementById('diagnostic-overlay');
+            const log = document.getElementById('diagnostic-log');
+            if (overlay && log) {
+                overlay.style.display = 'block';
+                // Avoid duplicating the same warning messages
+                if (!log.textContent.includes(message)) {
+                    log.textContent += '\n' + message;
+                }
+            }
+        }
+        
+        // Listen to console errors (Babel posts compiler errors here)
+        const originalConsoleError = console.error;
+        console.error = function() {
+            originalConsoleError.apply(console, arguments);
+            const args = Array.from(arguments).map(arg => {
+                if (arg instanceof Error) return arg.message + '\n' + arg.stack;
+                return typeof arg === 'object' ? JSON.stringify(arg) : String(arg);
+            }).join(' ');
+            if (args.includes('Babel') || args.includes('JSX') || args.includes('React') || args.includes('error') || args.includes('Error')) {
+                logDiagnosticError('[Babel/React Error] ' + args);
+            }
+        };
+
+        window.addEventListener('error', function(e) {
+            logDiagnosticError('[System Script Error] ' + e.message + ' (at ' + e.filename + ':' + e.lineno + ':' + e.colno + ')');
+        });
+        window.addEventListener('unhandledrejection', function(e) {
+            logDiagnosticError('[Unhandled Rejection] ' + e.reason);
+        });
+        // Check internet loading latency
+        setTimeout(function() {
+            if (typeof React === 'undefined' || typeof ReactDOM === 'undefined' || typeof Babel === 'undefined') {
+                logDiagnosticError('[Network Warning] Failed to load React/Babel dependencies. This happens when you are offline or if the CDN URLs are blocked. Please connect to the internet to load dependencies.');
+            }
+        }, 2000);
+    </script>
+
+    <div id="root"></div>
+
+    <!-- React Application Component Scripts -->
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // ==========================================================================
+        // 1. MOCK DATABASE DRIVER
+        // ==========================================================================
+        const db = {
+            getUsers: () => JSON.parse(localStorage.getItem('nexus_users')) || [],
+            saveUser: (user) => {
+                const users = db.getUsers();
+                users.push(user);
+                localStorage.setItem('nexus_users', JSON.stringify(users));
+            },
+            findUser: (email) => db.getUsers().find(u => u.email.toLowerCase() === email.toLowerCase()),
+            checkCredentials: (email, password) => {
+                const user = db.findUser(email);
+                return user && user.password === password ? user : null;
+            }
+        };
+
+        const session = {
+            get: () => {
+                const local = localStorage.getItem('nexus_session');
+                if (local) return JSON.parse(local);
+                const sessionData = sessionStorage.getItem('nexus_session');
+                return sessionData ? JSON.parse(sessionData) : null;
+            },
+            start: (user, remember) => {
+                const sessionData = { email: user.email, name: user.name, loginTime: Date.now() };
+                if (remember) {
+                    localStorage.setItem('nexus_session', JSON.stringify(sessionData));
+                } else {
+                    sessionStorage.setItem('nexus_session', JSON.stringify(sessionData));
+                }
+            },
+            end: () => {
+                localStorage.removeItem('nexus_session');
+                sessionStorage.removeItem('nexus_session');
+            }
+        };
+
+        // ==========================================================================
+        // 2. TOAST NOTIFICATION COMPONENT
+        // ==========================================================================
+        function Toast({ id, message, type, title, onClose }) {
+            const [isHiding, setIsHiding] = useState(false);
+
+            useEffect(() => {
+                const timer = setTimeout(() => {
+                    handleClose();
+                }, 3800); // Trigger hide animation slightly before parent unmounts
+                return () => clearTimeout(timer);
+            }, []);
+
+            const handleClose = () => {
+                setIsHiding(true);
+                setTimeout(() => {
+                    onClose(id);
+                }, 300); // Match animation duration
+            };
+
+            let iconSvg = null;
+            let defaultTitle = 'Notification';
+
+            if (type === 'success') {
+                defaultTitle = 'Success';
+                iconSvg = (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                        <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                    </svg>
+                );
+            } else if (type === 'error') {
+                defaultTitle = 'System Error';
+                iconSvg = (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="15" y1="9" x2="9" y2="15"></line>
+                        <line x1="9" y1="9" x2="15" y2="15"></line>
+                    </svg>
+                );
+            } else if (type === 'warning') {
+                defaultTitle = 'Warning';
+                iconSvg = (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path>
+                        <line x1="12" y1="9" x2="12" y2="13"></line>
+                        <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                    </svg>
+                );
+            } else {
+                defaultTitle = 'Information';
+                iconSvg = (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                    </svg>
+                );
+            }
+
+            return (
+                <div className={`toast ${type} ${isHiding ? 'hiding' : ''}`}>
+                    <div className="toast-icon">{iconSvg}</div>
+                    <div className="toast-content">
+                        <div className="toast-title">{title || defaultTitle}</div>
+                        <div className="toast-desc">{message}</div>
+                    </div>
+                    <button className="toast-close" onClick={handleClose} aria-label="Close Notification">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    </button>
+                </div>
+            );
+        }
+
+        // ==========================================================================
+        // 3. LOGIN FORM COMPONENT
+        // ==========================================================================
+        function LoginForm({ onSwitchView, onLogin, showToast, initialEmail }) {
+            const [email, setEmail] = useState(initialEmail || '');
+            const [password, setPassword] = useState('');
+            const [rememberMe, setRememberMe] = useState(false);
+            const [showPassword, setShowPassword] = useState(false);
+            const [loginRole, setLoginRole] = useState('operator'); // 'operator' | 'admin'
+            const [emailError, setEmailError] = useState('');
+            const [passwordError, setPasswordError] = useState('');
+
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                let isValid = true;
+
+                if (!email) {
+                    setEmailError('Email/Username is required');
+                    isValid = false;
+                } else if (email.toLowerCase() !== 'admin' && !emailRegex.test(email)) {
+                    setEmailError('Please enter a valid email format');
+                    isValid = false;
+                }
+
+                if (!password) {
+                    setPasswordError('Password is required');
+                    isValid = false;
+                }
+
+                if (!isValid) return;
+
+                const user = db.checkCredentials(email, password);
+
+                if (!user) {
+                    showToast('Incorrect email or password. Please try again.', 'error', 'Access Denied');
+                    setPassword('');
+                    return;
+                }
+
+                const userRole = user.role || 'operator';
+                if (loginRole === 'admin' && userRole !== 'admin') {
+                    showToast('Administrator privileges required for this access gateway.', 'error', 'Access Denied');
+                    return;
+                }
+                if (loginRole === 'operator' && userRole === 'admin') {
+                    showToast('Please use the Administrator login portal for admin accounts.', 'warning', 'Invalid Portal');
+                    return;
+                }
+
+                onLogin(user, rememberMe);
+            };
+
+            return (
+                <div className="auth-view active">
+                    <div className="login-role-selector">
+                        <button 
+                            type="button" 
+                            className={`role-tab ${loginRole === 'operator' ? 'active' : ''}`}
+                            onClick={() => { setLoginRole('operator'); setPassword(''); }}
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '6px' }}>
+                                <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
+                                <circle cx="12" cy="7" r="4"></circle>
+                            </svg>
+                            Operator
+                        </button>
+                        <button 
+                            type="button" 
+                            className={`role-tab ${loginRole === 'admin' ? 'active' : ''}`}
+                            onClick={() => { setLoginRole('admin'); setPassword(''); }}
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: '6px' }}>
+                                <rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect>
+                                <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                            </svg>
+                            Admin
+                        </button>
+                    </div>
+                    <form onSubmit={handleSubmit} noValidate>
+                        <div className="form-group">
+                            <label htmlFor="login-email">Email Address</label>
+                            <div className="input-wrapper">
+                                <svg className="input-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <rect width="20" height="16" x="2" y="4" rx="2"></rect>
+                                    <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"></path>
+                                </svg>
+                                <input 
+                                    type="text" 
+                                    id="login-email" 
+                                    placeholder="Email or Username" 
+                                    value={email}
+                                    onChange={(e) => { setEmail(e.target.value); setEmailError(''); }}
+                                    style={emailError ? { borderColor: 'var(--error)' } : {}}
+                                    autoComplete="username"
+                                />
+                            </div>
+                            <span className={`error-msg ${emailError ? 'visible' : ''}`}>{emailError}</span>
+                        </div>
+
+                        <div className="form-group">
+                            <div className="label-row">
+                                <label htmlFor="login-password">Password</label>
+                                <a href="#" className="form-link" onClick={(e) => { e.preventDefault(); onSwitchView('forgot'); }}>Forgot Password?</a>
+                            </div>
+                            <div className="input-wrapper">
+                                <svg className="input-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect>
+                                    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                                </svg>
+                                <input 
+                                    type={showPassword ? 'text' : 'password'} 
+                                    id="login-password" 
+                                    placeholder="••••••••" 
+                                    value={password}
+                                    onChange={(e) => { setPassword(e.target.value); setPasswordError(''); }}
+                                    style={passwordError ? { borderColor: 'var(--error)' } : {}}
+                                    autoComplete="current-password"
+                                />
+                                <button 
+                                    type="button" 
+                                    className="password-toggle" 
+                                    onClick={() => setShowPassword(!showPassword)}
+                                    aria-label="Toggle Password Visibility"
+                                >
+                                    <svg className={`icon-eye-off ${showPassword ? 'hidden' : ''}`} xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68M6.61 6.61A13.52 13.52 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61M2 2l20 20"></path>
+                                    </svg>
+                                    <svg className={`icon-eye ${showPassword ? '' : 'hidden'}`} xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path>
+                                        <circle cx="12" cy="12" r="3"></circle>
+                                    </svg>
+                                </button>
+                            </div>
+                            <span className={`error-msg ${passwordError ? 'visible' : ''}`}>{passwordError}</span>
+                        </div>
+
+                        <div className="form-options">
+                            <label className="checkbox-container">
+                                <input 
+                                    type="checkbox" 
+                                    checked={rememberMe}
+                                    onChange={(e) => setRememberMe(e.target.checked)}
+                                />
+                                <span className="checkbox-checkmark"></span>
+                                Remember me for 30 days
+                            </label>
+                        </div>
+
+                        <button type="submit" className="btn-submit">
+                            <span>Sign In</span>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M5 12h14M12 5l7 7-7 7"></path>
+                            </svg>
+                        </button>
+                    </form>
+
+                    <div className="auth-footer">
+                        Don't have an account? <a href="#" className="form-link" onClick={(e) => { e.preventDefault(); onSwitchView('register'); }}>Create Account</a>
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================================================
+        // 4. REGISTER FORM COMPONENT
+        // ==========================================================================
+        function RegisterForm({ onSwitchView, showToast, onRegisterSuccess }) {
+            const [name, setName] = useState('');
+            const [email, setEmail] = useState('');
+            const [password, setPassword] = useState('');
+            const [confirmPassword, setConfirmPassword] = useState('');
+            const [termsAccepted, setTermsAccepted] = useState(false);
+            
+            const [showPassword, setShowPassword] = useState(false);
+            const [showConfirm, setShowConfirm] = useState(false);
+
+            const [nameError, setNameError] = useState('');
+            const [emailError, setEmailError] = useState('');
+            const [passwordError, setPasswordError] = useState('');
+            const [confirmError, setConfirmError] = useState('');
+            const [termsError, setTermsError] = useState(false);
+
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+            const checkPasswordStrength = (pwd) => {
+                let score = 0;
+                if (!pwd) return { score, label: 'Empty', color: 'transparent' };
+                
+                if (pwd.length >= 8) score++;
+                if (/[A-Z]/.test(pwd)) score++;
+                if (/[a-z]/.test(pwd)) score++;
+                if (/[0-9]/.test(pwd)) score++;
+                if (/[^A-Za-z0-9]/.test(pwd)) score++;
+
+                let label = 'Weak';
+                let color = 'var(--error)';
+
+                if (score >= 5) {
+                    label = 'Very Strong';
+                    color = 'var(--success)';
+                } else if (score >= 4) {
+                    label = 'Strong';
+                    color = 'var(--success)';
+                } else if (score >= 3) {
+                    label = 'Moderate';
+                    color = 'var(--warning)';
+                } else if (score >= 2) {
+                    label = 'Fair';
+                    color = 'var(--warning)';
+                }
+
+                return { score, label, color };
+            };
+
+            const strengthResult = checkPasswordStrength(password);
+            const fillPercent = password ? (strengthResult.score / 5) * 100 : 0;
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                let isValid = true;
+
+                if (!name.trim()) {
+                    setNameError('Name is required');
+                    isValid = false;
+                }
+
+                if (!email.trim()) {
+                    setEmailError('Email is required');
+                    isValid = false;
+                } else if (!emailRegex.test(email.trim())) {
+                    setEmailError('Please enter a valid email format');
+                    isValid = false;
+                }
+
+                if (password.length < 8) {
+                    setPasswordError('Password must be at least 8 characters long');
+                    isValid = false;
+                } else if (strengthResult.score < 3) {
+                    setPasswordError('Password is too weak. Combine letters, numbers, and symbols.');
+                    isValid = false;
+                }
+
+                if (password !== confirmPassword) {
+                    setConfirmError('Passwords do not match');
+                    isValid = false;
+                }
+
+                if (!termsAccepted) {
+                    setTermsError(true);
+                    isValid = false;
+                }
+
+                if (!isValid) {
+                    showToast('Please correct validation errors', 'warning', 'Invalid Input');
+                    return;
+                }
+
+                if (db.findUser(email)) {
+                    setEmailError('This email is already registered');
+                    showToast('Account registration failed', 'error', 'Duplicate Email');
+                    return;
+                }
+
+                db.saveUser({
+                    name: name.trim(),
+                    email: email.trim(),
+                    password: password,
+                    role: 'operator'
+                });
+
+                showToast('Your account was created successfully! You can now log in.', 'success', 'Account Registered');
+                onRegisterSuccess(email.trim());
+            };
+
+            return (
+                <div className="auth-view active">
+                    <form onSubmit={handleSubmit} noValidate>
+                        <div className="form-group">
+                            <label htmlFor="reg-name">Full Name</label>
+                            <div className="input-wrapper">
+                                <svg className="input-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
+                                    <circle cx="12" cy="7" r="4"></circle>
+                                </svg>
+                                <input 
+                                    type="text" 
+                                    id="reg-name" 
+                                    placeholder="John Doe" 
+                                    value={name}
+                                    onChange={(e) => { setName(e.target.value); setNameError(''); }}
+                                    style={nameError ? { borderColor: 'var(--error)' } : {}}
+                                    autoComplete="name"
+                                />
+                            </div>
+                            <span className={`error-msg ${nameError ? 'visible' : ''}`}>{nameError}</span>
+                        </div>
+
+                        <div className="form-group">
+                            <label htmlFor="reg-email">Email Address</label>
+                            <div className="input-wrapper">
+                                <svg className="input-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <rect width="20" height="16" x="2" y="4" rx="2"></rect>
+                                    <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"></path>
+                                </svg>
+                                <input 
+                                    type="email" 
+                                    id="reg-email" 
+                                    placeholder="name@company.com" 
+                                    value={email}
+                                    onChange={(e) => { setEmail(e.target.value); setEmailError(''); }}
+                                    style={emailError ? { borderColor: 'var(--error)' } : {}}
+                                    autoComplete="username"
+                                />
+                            </div>
+                            <span className={`error-msg ${emailError ? 'visible' : ''}`}>{emailError}</span>
+                        </div>
+
+                        <div className="form-group">
+                            <label htmlFor="reg-password">Password</label>
+                            <div className="input-wrapper">
+                                <svg className="input-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect>
+                                    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                                </svg>
+                                <input 
+                                    type={showPassword ? 'text' : 'password'} 
+                                    id="reg-password" 
+                                    placeholder="Min. 8 characters" 
+                                    value={password}
+                                    onChange={(e) => { setPassword(e.target.value); setPasswordError(''); }}
+                                    style={passwordError ? { borderColor: 'var(--error)' } : {}}
+                                    autoComplete="new-password"
+                                />
+                                <button 
+                                    type="button" 
+                                    className="password-toggle" 
+                                    onClick={() => setShowPassword(!showPassword)}
+                                    aria-label="Toggle Password Visibility"
+                                >
+                                    <svg className={`icon-eye-off ${showPassword ? 'hidden' : ''}`} xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68M6.61 6.61A13.52 13.52 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61M2 2l20 20"></path>
+                                    </svg>
+                                    <svg className={`icon-eye ${showPassword ? '' : 'hidden'}`} xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path>
+                                        <circle cx="12" cy="12" r="3"></circle>
+                                    </svg>
+                                </button>
+                            </div>
+                            
+                            <div className="strength-meter-container">
+                                <div className="strength-bar">
+                                    <div 
+                                        className="strength-fill" 
+                                        style={{ width: `${fillPercent}%`, backgroundColor: strengthResult.color }}
+                                    ></div>
+                                </div>
+                                <span 
+                                    className="strength-label"
+                                    style={{ color: password ? strengthResult.color : 'var(--text-muted)' }}
+                                >
+                                    Password strength: {strengthResult.label}
+                                </span>
+                            </div>
+                            <span className={`error-msg ${passwordError ? 'visible' : ''}`}>{passwordError}</span>
+                        </div>
+
+                        <div className="form-group">
+                            <label htmlFor="reg-confirm">Confirm Password</label>
+                            <div className="input-wrapper">
+                                <svg className="input-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect>
+                                    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                                </svg>
+                                <input 
+                                    type={showConfirm ? 'text' : 'password'} 
+                                    id="reg-confirm" 
+                                    placeholder="Repeat your password" 
+                                    value={confirmPassword}
+                                    onChange={(e) => { setConfirmPassword(e.target.value); setConfirmError(''); }}
+                                    style={confirmError ? { borderColor: 'var(--error)' } : {}}
+                                    autoComplete="new-password"
+                                />
+                                <button 
+                                    type="button" 
+                                    className="password-toggle" 
+                                    onClick={() => setShowConfirm(!showConfirm)}
+                                    aria-label="Toggle Password Visibility"
+                                >
+                                    <svg className={`icon-eye-off ${showConfirm ? 'hidden' : ''}`} xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68M6.61 6.61A13.52 13.52 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61M2 2l20 20"></path>
+                                    </svg>
+                                    <svg className={`icon-eye ${showConfirm ? '' : 'hidden'}`} xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path>
+                                        <circle cx="12" cy="12" r="3"></circle>
+                                    </svg>
+                                </button>
+                            </div>
+                            <span className={`error-msg ${confirmError ? 'visible' : ''}`}>{confirmError}</span>
+                        </div>
+
+                        <div className="form-options">
+                            <label className="checkbox-container">
+                                <input 
+                                    type="checkbox" 
+                                    checked={termsAccepted}
+                                    onChange={(e) => { setTermsAccepted(e.target.checked); setTermsError(false); }}
+                                />
+                                <span className="checkbox-checkmark"></span>
+                                I agree to the <a href="#" className="form-link">Terms & Conditions</a>
+                            </label>
+                            <span className={`error-msg block ${termsError ? 'visible' : ''}`}>You must accept the terms to continue</span>
+                        </div>
+
+                        <button type="submit" className="btn-submit">
+                            <span>Create Account</span>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M5 12h14M12 5l7 7-7 7"></path>
+                            </svg>
+                        </button>
+                    </form>
+
+                    <div className="auth-footer">
+                        Already have an account? <a href="#" className="form-link" onClick={(e) => { e.preventDefault(); onSwitchView('login'); }}>Sign In</a>
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================================================
+        // 5. FORGOT PASSWORD FORM COMPONENT
+        // ==========================================================================
+        function ForgotPasswordForm({ onSwitchView, showToast }) {
+            const [email, setEmail] = useState('');
+            const [emailError, setEmailError] = useState('');
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+
+                if (!email.trim()) {
+                    setEmailError('Email is required');
+                    return;
+                } else if (!emailRegex.test(email.trim())) {
+                    setEmailError('Please enter a valid email format');
+                    return;
+                }
+
+                showToast(`A secure recovery key has been simulated to ${email.trim()}.`, 'success', 'Recovery Dispatch');
+                setEmail('');
+                
+                setTimeout(() => {
+                    onSwitchView('login');
+                }, 1500);
+            };
+
+            return (
+                <div className="auth-view active">
+                    <p className="view-intro">Enter your email address and we'll send you a link to reset your password and recover your account access.</p>
+                    
+                    <form onSubmit={handleSubmit} noValidate>
+                        <div className="form-group">
+                            <label htmlFor="forgot-email">Email Address</label>
+                            <div className="input-wrapper">
+                                <svg className="input-icon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <rect width="20" height="16" x="2" y="4" rx="2"></rect>
+                                    <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"></path>
+                                </svg>
+                                <input 
+                                    type="email" 
+                                    id="forgot-email" 
+                                    placeholder="name@company.com" 
+                                    value={email}
+                                    onChange={(e) => { setEmail(e.target.value); setEmailError(''); }}
+                                    style={emailError ? { borderColor: 'var(--error)' } : {}}
+                                    autoComplete="username"
+                                />
+                            </div>
+                            <span className={`error-msg ${emailError ? 'visible' : ''}`}>{emailError}</span>
+                        </div>
+
+                        <button type="submit" className="btn-submit">
+                            <span>Send Reset Link</span>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M22 2 11 13M22 2l-7 20-4-9-9-4Z"></path>
+                            </svg>
+                        </button>
+                    </form>
+
+                    <div className="auth-footer">
+                        Back to <a href="#" className="form-link" onClick={(e) => { e.preventDefault(); onSwitchView('login'); }}>Sign In</a>
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================================================
+        // 6. GALLERY & UPLOAD COMPONENT
+        // ==========================================================================
+        function GalleryView({ photos, onUpdatePhotos, onImageUpload, showToast, role }) {
+            const [isCameraOpen, setIsCameraOpen] = useState(false);
+            const [isDragActive, setIsDragActive] = useState(false);
+            const [selectedPhoto, setSelectedPhoto] = useState(null);
+            const videoRef = useRef(null);
+            const streamRef = useRef(null);
+
+            const savePhotosToStorage = (newPhotos) => {
+                onUpdatePhotos(newPhotos);
+            };
+
+            const openCamera = async () => {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ 
+                        video: { width: 640, height: 480 } 
+                    });
+                    streamRef.current = stream;
+                    if (videoRef.current) {
+                        videoRef.current.srcObject = stream;
+                    }
+                    setIsCameraOpen(true);
+                    showToast('Camera feed successfully activated.', 'success', 'Camera Active');
+                } catch (err) {
+                    console.error('Camera access failed:', err);
+                    showToast('Could not access camera. Please check permissions.', 'error', 'Camera Error');
+                }
+            };
+
+            const closeCamera = () => {
+                if (streamRef.current) {
+                    streamRef.current.getTracks().forEach(track => track.stop());
+                    streamRef.current = null;
+                }
+                setIsCameraOpen(false);
+            };
+
+            useEffect(() => {
+                return () => {
+                    if (streamRef.current) {
+                        streamRef.current.getTracks().forEach(track => track.stop());
+                    }
+                };
+            }, []);
+
+            const capturePhoto = () => {
+                if (videoRef.current) {
+                    const video = videoRef.current;
+                    const canvas = document.createElement('canvas');
+                    canvas.width = video.videoWidth || 640;
+                    canvas.height = video.videoHeight || 480;
+                    
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    
+                    const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+                    
+                    const newPhoto = {
+                        id: Date.now() + Math.random().toString(36).substr(2, 9),
+                        url: dataUrl,
+                        date: new Date().toLocaleString()
+                    };
+                    
+                    const updatedPhotos = [newPhoto, ...photos];
+                    savePhotosToStorage(updatedPhotos);
+                    showToast('Snapshot captured and saved to terminal base.', 'success', 'Image Saved');
+                    closeCamera();
+                }
+            };
+
+            // Image upload is handled by the parent Dashboard component to sync across tabs
+
+            const handleDrag = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (e.type === 'dragenter' || e.type === 'dragover') {
+                    setIsDragActive(true);
+                } else if (e.type === 'dragleave') {
+                    setIsDragActive(false);
+                }
+            };
+
+            const handleDrop = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setIsDragActive(false);
+                
+                if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                    onImageUpload(e.dataTransfer.files[0]);
+                }
+            };
+
+            const deletePhoto = (e, id) => {
+                e.stopPropagation();
+                const filtered = photos.filter(p => p.id !== id);
+                savePhotosToStorage(filtered);
+                showToast('Image deleted from terminal storage.', 'info', 'Image Deleted');
+            };
+
+            return (
+                <div className="gallery-layout">
+                    <div className="gallery-action-bar">
+                        {!isCameraOpen ? (
+                            <button className="btn-action primary" onClick={openCamera}>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                                    <circle cx="12" cy="13" r="4"></circle>
+                                </svg>
+                                <span>Open Camera</span>
+                            </button>
+                        ) : (
+                            <button className="btn-action danger" onClick={closeCamera}>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                                </svg>
+                                <span>Close Camera</span>
+                            </button>
+                        )}
+                    </div>
+
+                    {isCameraOpen && (
+                        <div className="camera-preview-container">
+                            <div className="video-wrapper">
+                                <video ref={videoRef} autoPlay playsInline></video>
+                            </div>
+                            <div className="gallery-action-bar">
+                                <button className="btn-action primary" onClick={capturePhoto}>
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <circle cx="12" cy="12" r="10"></circle>
+                                        <circle cx="12" cy="12" r="3"></circle>
+                                    </svg>
+                                    <span>Capture Frame</span>
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    <div 
+                        className={`gallery-upload-card ${isDragActive ? 'drag-active' : ''}`}
+                        onDragEnter={handleDrag}
+                        onDragOver={handleDrag}
+                        onDragLeave={handleDrag}
+                        onDrop={handleDrop}
+                        onClick={() => document.getElementById('gallery-file-picker').click()}
+                    >
+                        <input 
+                            type="file" 
+                            id="gallery-file-picker" 
+                            accept="image/*"
+                            style={{ display: 'none' }}
+                            onChange={(e) => {
+                                if (e.target.files && e.target.files[0]) {
+                                    onImageUpload(e.target.files[0]);
+                                }
+                            }}
+                        />
+                        <div className="upload-icon-circle">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="17 8 12 3 7 8"></polyline>
+                                <line x1="12" y1="3" x2="12" y2="15"></line>
+                            </svg>
+                        </div>
+                        <div className="upload-text">
+                            <h4>Upload photos from your device</h4>
+                            <p>Drag and drop image files here, or click to browse local files</p>
+                        </div>
+                    </div>
+
+                    <div className="gallery-grid">
+                        {photos.length === 0 ? (
+                            <div className="empty-gallery">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                    <rect width="18" height="18" x="3" y="3" rx="2" ry="2"></rect>
+                                    <circle cx="9" cy="9" r="2"></circle>
+                                    <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"></path>
+                                </svg>
+                                <p>No photos saved. Upload a file or open the camera to capture a snap!</p>
+                            </div>
+                        ) : (
+                            photos.map(p => (
+                                <div 
+                                    key={p.id} 
+                                    className="photo-card"
+                                    onClick={() => setSelectedPhoto(p)}
+                                >
+                                    {role === 'admin' && (
+                                        <button 
+                                            className="photo-delete-btn" 
+                                            onClick={(e) => deletePhoto(e, p.id)}
+                                            aria-label="Delete Photo"
+                                        >
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                <polyline points="3 6 5 6 21 6"></polyline>
+                                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                                <line x1="10" y1="11" x2="10" y2="17"></line>
+                                                <line x1="14" y1="11" x2="14" y2="17"></line>
+                                            </svg>
+                                        </button>
+                                    )}
+                                    <img src={p.url} alt="Gallery Snapshot" />
+                                    <div className="photo-overlay">
+                                        <span className="photo-date">{p.date.split(',')[0]}</span>
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                    </div>
+
+                    {selectedPhoto && (
+                        <div className="lightbox-modal" onClick={() => setSelectedPhoto(null)}>
+                            <div className="lightbox-content" onClick={(e) => e.stopPropagation()}>
+                                <button 
+                                    className="lightbox-close-btn" 
+                                    onClick={() => setSelectedPhoto(null)}
+                                    aria-label="Close Fullscreen"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                                    </svg>
+                                </button>
+                                <img src={selectedPhoto.url} alt="Fullscreen View" />
+                                <div className="lightbox-caption">Captured on {selectedPhoto.date}</div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // ==========================================================================
+        // 7. DASHBOARD COMPONENT
+        // ==========================================================================
+        function Dashboard({ user, onLogout, showToast }) {
+            const [elapsedSeconds, setElapsedSeconds] = useState(0);
+            const [animateGrid, setAnimateGrid] = useState(false);
+            const [activeTab, setActiveTab] = useState('overview'); // 'overview' | 'gallery'
+            const [photos, setPhotos] = useState([]);
+            const [selectedRecentPhoto, setSelectedRecentPhoto] = useState(null);
+
+            // Load photos from localStorage on mount and sync to state
+            useEffect(() => {
+                const storedPhotos = JSON.parse(localStorage.getItem('nexus_gallery')) || [];
+                setPhotos(storedPhotos);
+            }, []);
+
+            const handleUpdatePhotos = (newPhotos) => {
+                setPhotos(newPhotos);
+                localStorage.setItem('nexus_gallery', JSON.stringify(newPhotos));
+            };
+
+            const handleImageUpload = (file) => {
+                if (!file) return;
+                if (!file.type.startsWith('image/')) {
+                    showToast('Only image files are supported in this terminal.', 'error', 'Invalid File Type');
+                    return;
+                }
+                
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        let width = img.width;
+                        let height = img.height;
+                        
+                        const MAX_SIZE = 800;
+                        if (width > MAX_SIZE || height > MAX_SIZE) {
+                            if (width > height) {
+                                height *= MAX_SIZE / width;
+                                width = MAX_SIZE;
+                            } else {
+                                width *= MAX_SIZE / height;
+                                height = MAX_SIZE;
+                            }
+                        }
+                        
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+                        
+                        const compressedUrl = canvas.toDataURL('image/jpeg', 0.85);
+                        const newPhoto = {
+                            id: Date.now() + Math.random().toString(36).substr(2, 9),
+                            url: compressedUrl,
+                            date: new Date().toLocaleString()
+                        };
+                        
+                        const updatedPhotos = [newPhoto, ...photos];
+                        handleUpdatePhotos(updatedPhotos);
+                        showToast('Image uploaded and synced to workspace.', 'success', 'Upload Successful');
+                    };
+                    img.src = e.target.result;
+                };
+                reader.readAsDataURL(file);
+            };
+
+            // Timer hook
+            useEffect(() => {
+                const startTime = user.loginTime || Date.now();
+                
+                const updateTimer = () => {
+                    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+                    setElapsedSeconds(elapsed);
+                };
+
+                updateTimer();
+                const interval = setInterval(updateTimer, 1000);
+                
+                // Trigger grid items transition delay
+                setTimeout(() => setAnimateGrid(true), 50);
+
+                return () => clearInterval(interval);
+            }, [user]);
+
+            const formatTimer = (totalSeconds) => {
+                const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+                const seconds = (totalSeconds % 60).toString().padStart(2, '0');
+                return `${minutes}:${seconds}`;
+            };
+
+            const names = user.name.split(' ');
+            const firstName = names[0];
+            const initials = names.length > 1 ? (names[0][0] + names[1][0]) : names[0][0];
+            
+            const dateOptions = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+            const formattedDate = new Date().toLocaleDateString('en-US', dateOptions);
+
+            return (
+                <section id="dashboard-section" className="dashboard-card active">
+                    {/* Sidebar */}
+                    <aside className="dash-sidebar">
+                        <div className="dash-logo" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <img src="rj_logo.png" alt="RJ Logo" style={{ width: '28px', height: '28px', objectFit: 'contain' }} />
+                            <span>RJ Pvt<span> ltd</span></span>
+                        </div>
+                        
+                        <nav className="sidebar-menu">
+                            <a href="#" className={`menu-item ${activeTab === 'overview' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setActiveTab('overview'); }}>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <rect x="3" y="3" width="7" height="9" rx="1"></rect>
+                                    <rect x="14" y="3" width="7" height="5" rx="1"></rect>
+                                    <rect x="14" y="12" width="7" height="9" rx="1"></rect>
+                                    <rect x="3" y="16" width="7" height="5" rx="1"></rect>
+                                </svg>
+                                <span>Overview</span>
+                            </a>
+                            <a href="#" className={`menu-item ${activeTab === 'gallery' ? 'active' : ''}`} onClick={(e) => { e.preventDefault(); setActiveTab('gallery'); }}>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                    <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                                    <polyline points="21 15 16 10 5 21"></polyline>
+                                </svg>
+                                <span>Gallery</span>
+                            </a>
+                            <a 
+                                href="#" 
+                                className={`menu-item ${user.role !== 'admin' ? 'menu-locked' : ''}`} 
+                                onClick={(e) => { 
+                                    e.preventDefault(); 
+                                    if (user.role !== 'admin') {
+                                        showToast('Administrator privileges required for Security systems.', 'error', 'Clearance Required');
+                                    } else {
+                                        showToast('Security clearance validation systems are nominal.', 'success', 'Security Check');
+                                    }
+                                }}
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                                </svg>
+                                <span>Security</span>
+                                {user.role !== 'admin' && (
+                                    <svg className="menu-lock-icon" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                        <rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect>
+                                        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                                    </svg>
+                                )}
+                            </a>
+                            <a 
+                                href="#" 
+                                className={`menu-item ${user.role !== 'admin' ? 'menu-locked' : ''}`} 
+                                onClick={(e) => { 
+                                    e.preventDefault(); 
+                                    if (user.role !== 'admin') {
+                                        showToast('Administrator privileges required for Settings panel.', 'error', 'Clearance Required');
+                                    } else {
+                                        showToast('Operator system configuration node is loaded.', 'success', 'Configuration');
+                                    }
+                                }}
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <circle cx="12" cy="12" r="3"></circle>
+                                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                                </svg>
+                                <span>Settings</span>
+                                {user.role !== 'admin' && (
+                                    <svg className="menu-lock-icon" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                        <rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect>
+                                        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                                    </svg>
+                                )}
+                            </a>
+                        </nav>
+
+                        <div className="sidebar-footer">
+                            <button onClick={onLogout} className="btn-logout">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"></path>
+                                </svg>
+                                <span>Sign Out</span>
+                            </button>
+                        </div>
+                    </aside>
+
+                    {/* Main Content Area */}
+                    <div className="dash-main">
+                        <header className="dash-header">
+                            <div className="header-left">
+                                <h2>Welcome back, <span id="dash-username">{firstName}</span>!</h2>
+                                <p className="current-date">{formattedDate}</p>
+                            </div>
+                            <div className={`user-profile-badge ${user.role === 'admin' ? 'admin' : 'operator'}`}>
+                                <div className="avatar">{initials.toUpperCase()}</div>
+                                <div className="badge-info">
+                                    <span className="user-fullname">{user.name}</span>
+                                    <span className="user-role">{user.role === 'admin' ? 'Administrator' : 'Authorized Operator'}</span>
+                                </div>
+                            </div>
+                        </header>
+
+                        {activeTab === 'overview' ? (
+                            <div className="dash-content-grid">
+                                {/* Stat Card 1 */}
+                                <div className="grid-card glow-card">
+                                    <div className="card-header">
+                                        <h3>Security Level</h3>
+                                        <span className="status-indicator success">Active</span>
+                                    </div>
+                                    <div className="card-value">Class 4</div>
+                                    <p className="card-desc">High privilege administrative clearance token</p>
+                                </div>
+
+                                {/* Stat Card 2 */}
+                                <div className="grid-card">
+                                    <div className="card-header">
+                                        <h3>Session Duration</h3>
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                            <circle cx="12" cy="12" r="10"></circle>
+                                            <polyline points="12 6 12 12 16 14"></polyline>
+                                        </svg>
+                                    </div>
+                                    <div className="card-value">{formatTimer(elapsedSeconds)}</div>
+                                    <p className="card-desc">Continuous secure telemetry monitoring</p>
+                                </div>
+
+                                {/* Stat Card 3 */}
+                                <div className="grid-card">
+                                    <div className="card-header">
+                                        <h3>Active Endpoints</h3>
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                            <path d="M5 12h14M12 5l7 7-7 7"></path>
+                                        </svg>
+                                    </div>
+                                    <div className="card-value">12 / 12</div>
+                                    <p className="card-desc">All remote security nodes reporting green</p>
+                                </div>
+
+                                {/* Graph Card */}
+                                <div className="grid-card col-span-2">
+                                    <div className="card-header">
+                                        <h3>Authentication Events (24h)</h3>
+                                        <span className="card-subtitle">Real-time gateway audit log</span>
+                                    </div>
+                                    <div className="mock-chart-container">
+                                        <div className="chart-bars">
+                                            <div className="bar-col">
+                                                <div className="bar-fill" style={{ height: animateGrid ? '35%' : '0%' }}></div>
+                                                <span>00h</span>
+                                            </div>
+                                            <div className="bar-col">
+                                                <div className="bar-fill" style={{ height: animateGrid ? '50%' : '0%' }}></div>
+                                                <span>04h</span>
+                                            </div>
+                                            <div className="bar-col">
+                                                <div className="bar-fill" style={{ height: animateGrid ? '25%' : '0%' }}></div>
+                                                <span>08h</span>
+                                            </div>
+                                            <div className="bar-col">
+                                                <div className="bar-fill" style={{ height: animateGrid ? '70%' : '0%' }}></div>
+                                                <span>12h</span>
+                                            </div>
+                                            <div className="bar-col">
+                                                <div className="bar-fill" style={{ height: animateGrid ? '85%' : '0%' }}></div>
+                                                <span>16h</span>
+                                            </div>
+                                            <div className="bar-col">
+                                                <div className="bar-fill active" style={{ height: animateGrid ? '95%' : '0%' }}></div>
+                                                <span>20h</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Security Logs Card */}
+                                <div className="grid-card">
+                                    <div className="card-header">
+                                        <h3>Security Log</h3>
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                            <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"></path>
+                                            <path d="m9 12 2 2 4-4"></path>
+                                        </svg>
+                                    </div>
+                                    <div className="security-logs">
+                                        <div className="log-item">
+                                            <span className="log-time">Just now</span>
+                                            <span className="log-text">Session verification check succeeded</span>
+                                        </div>
+                                        <div className="log-item">
+                                            <span className="log-time">1m ago</span>
+                                            <span className="log-text">Secure login successful</span>
+                                        </div>
+                                        <div className="log-item">
+                                            <span className="log-time">5m ago</span>
+                                            <span className="log-text">GeoIP verification: US East</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Recent Uploads Filmstrip Card */}
+                                <div className="grid-card" style={{ gridColumn: 'span 3' }}>
+                                    <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <div>
+                                            <h3>Recent Uploads</h3>
+                                            <span className="card-subtitle">Latest captures synced to the terminal node</span>
+                                        </div>
+                                        <button 
+                                            className="btn-action primary" 
+                                            style={{ padding: '6px 14px', fontSize: '0.8rem', height: 'auto', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', borderRadius: '8px' }}
+                                            onClick={() => document.getElementById('dash-quick-picker').click()}
+                                        >
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                                <polyline points="17 8 12 3 7 8"></polyline>
+                                                <line x1="12" y1="3" x2="12" y2="15"></line>
+                                            </svg>
+                                            <span>Quick Upload</span>
+                                        </button>
+                                        <input 
+                                            type="file" 
+                                            id="dash-quick-picker" 
+                                            accept="image/*"
+                                            style={{ display: 'none' }}
+                                            onChange={(e) => {
+                                                if (e.target.files && e.target.files[0]) {
+                                                    handleImageUpload(e.target.files[0]);
+                                                }
+                                            }}
+                                        />
+                                    </div>
+                                    <div className="recent-uploads-row">
+                                        {photos.length === 0 ? (
+                                            <p className="no-recent-uploads">No uploads detected. Go to the Gallery tab to capture snaps or drop files.</p>
+                                        ) : (
+                                            photos.slice(0, 6).map(p => (
+                                                <div 
+                                                    key={p.id} 
+                                                    className="recent-upload-thumb" 
+                                                    onClick={() => setSelectedRecentPhoto(p)}
+                                                >
+                                                    <img src={p.url} alt="Recent Snapshot Thumbnail" />
+                                                    <span className="thumb-date">{p.date.split(',')[0]}</span>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        ) : (
+                            <GalleryView photos={photos} onUpdatePhotos={handleUpdatePhotos} onImageUpload={handleImageUpload} showToast={showToast} role={user.role} />
+                        )}
+                    </div>
+
+                    {/* Fullscreen Lightbox Zoom Modal for Dashboard Overview */}
+                    {selectedRecentPhoto && (
+                        <div className="lightbox-modal" onClick={() => setSelectedRecentPhoto(null)}>
+                            <div className="lightbox-content" onClick={(e) => e.stopPropagation()}>
+                                <button 
+                                    className="lightbox-close-btn" 
+                                    onClick={() => setSelectedRecentPhoto(null)}
+                                    aria-label="Close Fullscreen"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                                    </svg>
+                                </button>
+                                <img src={selectedRecentPhoto.url} alt="Fullscreen View" />
+                                <div className="lightbox-caption">Captured on {selectedRecentPhoto.date}</div>
+                            </div>
+                        </div>
+                    )}
+                </section>
+            );
+        }
+
+        // ==========================================================================
+        // 7. MAIN APP WRAPPER COMPONENT
+        // ==========================================================================
+        function App() {
+            const [theme, setTheme] = useState('dark');
+            const [currentView, setCurrentView] = useState('login'); // 'login' | 'register' | 'forgot' | 'dashboard'
+            const [currentUser, setCurrentUser] = useState(null);
+            const [toasts, setToasts] = useState([]);
+            const [prefilledEmail, setPrefilledEmail] = useState('');
+            const [isAuthHiding, setIsAuthHiding] = useState(false);
+            const [particles, setParticles] = useState([]);
+
+            // Initialize global state triggers, mouse movement tracking, and backdrop particles
+            useEffect(() => {
+                // Mouse movement tracking
+                const handleMouseMove = (e) => {
+                    document.body.style.setProperty('--mouse-x', `${e.clientX}px`);
+                    document.body.style.setProperty('--mouse-y', `${e.clientY}px`);
+                };
+                window.addEventListener('mousemove', handleMouseMove);
+
+                // Generate 25 floating bubble particles
+                const generatedParticles = Array.from({ length: 25 }).map((_, i) => ({
+                    id: i,
+                    left: Math.random() * 100,
+                    size: Math.random() * 8 + 4,
+                    delay: Math.random() * 20,
+                    duration: Math.random() * 15 + 10,
+                    opacity: Math.random() * 0.35 + 0.1
+                }));
+                setParticles(generatedParticles);
+
+                // Initialize default database users (Admin & Operator)
+                let users = db.getUsers();
+                // Filter out any old admin users to prevent multiple admin nodes
+                users = users.filter(u => u.role !== 'admin' && u.email.toLowerCase() !== 'admin');
+                
+                // Save the new admin credentials
+                users.push({
+                    name: 'RJ Admin',
+                    email: 'admin',
+                    password: 'raisuj_2004',
+                    role: 'admin'
+                });
+
+                // Ensure default operator exists
+                if (!users.some(u => u.email.toLowerCase() === 'operator@rj.io')) {
+                    users.push({
+                        name: 'RJ Operator',
+                        email: 'operator@rj.io',
+                        password: 'Password@123',
+                        role: 'operator'
+                    });
+                }
+                
+                localStorage.setItem('nexus_users', JSON.stringify(users));
+                console.log('Seeded database users: admin / raisuj_2004 & operator@rj.io');
+
+                // Theme sync
+                const storedTheme = localStorage.getItem('nexus_theme');
+                if (storedTheme) {
+                    setTheme(storedTheme);
+                    document.documentElement.setAttribute('data-theme', storedTheme);
+                } else {
+                    const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                    const defaultTheme = systemPrefersDark ? 'dark' : 'light';
+                    setTheme(defaultTheme);
+                    document.documentElement.setAttribute('data-theme', defaultTheme);
+                }
+
+                // Check active session routing
+                const activeSession = session.get();
+                if (activeSession) {
+                    const user = db.findUser(activeSession.email);
+                    if (user) {
+                        const restoredUser = { ...user, loginTime: activeSession.loginTime };
+                        setCurrentUser(restoredUser);
+                        setCurrentView('dashboard');
+                        showToast(`Restoring terminal session. Welcome back.`, 'success', 'Session Restored');
+                    } else {
+                        session.end();
+                    }
+                }
+
+                return () => {
+                    window.removeEventListener('mousemove', handleMouseMove);
+                };
+            }, []);
+
+            const toggleTheme = () => {
+                const nextTheme = theme === 'dark' ? 'light' : 'dark';
+                setTheme(nextTheme);
+                document.documentElement.setAttribute('data-theme', nextTheme);
+                localStorage.setItem('nexus_theme', nextTheme);
+                showToast(`Switched to ${nextTheme} mode`, 'info', 'Theme Updated');
+            };
+
+            const showToast = (message, type = 'info', title = '') => {
+                const id = Date.now() + Math.random().toString(36).substr(2, 9);
+                setToasts(prev => [...prev, { id, message, type, title }]);
+            };
+
+            const removeToast = (id) => {
+                setToasts(prev => prev.filter(toast => toast.id !== id));
+            };
+
+            const handleLogin = (user, remember) => {
+                session.start(user, remember);
+                showToast(`Authenticated successfully. Welcoming operator...`, 'success', 'Identity Verified');
+                
+                // Transition out login view
+                setIsAuthHiding(true);
+                setTimeout(() => {
+                    const authenticatedUser = { ...user, loginTime: Date.now() };
+                    setCurrentUser(authenticatedUser);
+                    setCurrentView('dashboard');
+                    setIsAuthHiding(false);
+                }, 300);
+            };
+
+            const handleLogout = () => {
+                session.end();
+                showToast('You have been logged out of the terminal session.', 'info', 'Session Ended');
+                
+                setCurrentUser(null);
+                setCurrentView('login');
+                setPrefilledEmail('');
+            };
+
+            const handleRegisterSuccess = (registeredEmail) => {
+                setPrefilledEmail(registeredEmail);
+                setCurrentView('login');
+            };
+
+            const handleViewSwitch = (newView) => {
+                setCurrentView(newView);
+            };
+
+            const getCarouselTransform = () => {
+                if (currentView === 'dashboard') return 'translateX(0%)';
+                switch (currentView) {
+                    case 'register': return 'translateX(-33.3333%)';
+                    case 'forgot': return 'translateX(-66.6666%)';
+                    default: return 'translateX(0%)';
+                }
+            };
+
+            return (
+                <React.Fragment>
+                    {/* Toast Notification Container */}
+                    <div id="toast-container" className="toast-container">
+                        {toasts.map(toast => (
+                            <Toast 
+                                key={toast.id}
+                                id={toast.id}
+                                message={toast.message}
+                                type={toast.type}
+                                title={toast.title}
+                                onClose={removeToast}
+                            />
+                        ))}
+                    </div>
+
+                    {/* Decorative Background Elements */}
+                    <div className="bg-decorations">
+                        <div className="shape shape-1"></div>
+                        <div className="shape shape-2"></div>
+                        <div className="shape shape-3"></div>
+                    </div>
+
+                    {/* Floating Particles Parallax Background */}
+                    <div className="particles-container">
+                        {particles.map(p => (
+                            <div 
+                                key={p.id}
+                                className="particle"
+                                style={{
+                                    left: `${p.left}%`,
+                                    width: `${p.size}px`,
+                                    height: `${p.size}px`,
+                                    animationDelay: `${p.delay}s`,
+                                    animationDuration: `${p.duration}s`,
+                                    opacity: p.opacity
+                                }}
+                            />
+                        ))}
+                    </div>
+
+                    {/* Floating Theme Switcher */}
+                    <button className="theme-toggle" onClick={toggleTheme} aria-label="Toggle Theme">
+                        <svg className={`icon-sun ${theme === 'dark' ? '' : 'hidden'}`} xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="12" cy="12" r="4"></circle>
+                            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path>
+                        </svg>
+                        <svg className={`icon-moon ${theme === 'light' ? '' : 'hidden'}`} xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path>
+                        </svg>
+                    </button>
+
+                    <main className="main-wrapper">
+                        {currentView !== 'dashboard' && (
+                            <section id="auth-section" className={`auth-card active ${isAuthHiding ? 'hiding' : ''}`} style={isAuthHiding ? { transform: 'translateY(-20px) rotateX(-4deg) scale(0.95)', opacity: 0 } : {}}>
+                                <div className="auth-header">
+                                    <div className="brand-logo">
+                                        <img src="rj_logo.png" alt="RJ Pvt ltd Logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                                    </div>
+                                    <h1 className="brand-title">RJ Pvt<span> ltd</span></h1>
+                                    <p className="brand-tagline">Enter your credentials to access the secure portal</p>
+                                </div>
+
+                                <div className="auth-carousel-container">
+                                    <div className="auth-carousel" style={{ transform: getCarouselTransform() }}>
+                                        <div className="auth-carousel-slide">
+                                            <LoginForm 
+                                                onSwitchView={handleViewSwitch} 
+                                                onLogin={handleLogin}
+                                                showToast={showToast}
+                                                initialEmail={prefilledEmail}
+                                            />
+                                        </div>
+                                        <div className="auth-carousel-slide">
+                                            <RegisterForm 
+                                                onSwitchView={handleViewSwitch}
+                                                showToast={showToast}
+                                                onRegisterSuccess={handleRegisterSuccess}
+                                            />
+                                        </div>
+                                        <div className="auth-carousel-slide">
+                                            <ForgotPasswordForm 
+                                                onSwitchView={handleViewSwitch}
+                                                showToast={showToast}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+                        )}
+
+                        {currentView === 'dashboard' && currentUser && (
+                            <Dashboard 
+                                user={currentUser} 
+                                onLogout={handleLogout}
+                                showToast={showToast}
+                            />
+                        )}
+                    </main>
+                </React.Fragment>
+            );
+        }
+
+        // Render application
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
