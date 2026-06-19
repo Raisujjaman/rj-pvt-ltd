@@ -160,13 +160,19 @@ To test the app:
 
 ## 📄 License
 
-This project is proprietary and belongs to **RJ Pvt Ltd**.  
-All rights reserved © 2026.
+This project is proprietary software owned exclusively by **RJ Pvt Ltd**.  
+Unauthorized use, reproduction, or distribution is strictly prohibited.
+
+See the [LICENSE](./LICENSE) file for full terms and conditions.
+
+> © 2026 **RJ Pvt Ltd** — All Rights Reserved.
 
 ---
 
 <div align="center">
 
 Made with ❤️ by **RJ Pvt Ltd**
+
+<sub>© 2026 RJ Pvt Ltd · All Rights Reserved · Proprietary & Confidential</sub>
 
 </div>
